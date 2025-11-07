@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: arbitrage_postgres
+    environment:
+      POSTGRES_USER: arbitrage_user
+      POSTGRES_PASSWORD: arbitrage_pass
+      POSTGRES_DB: arbitrage_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arbitrage_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: arbitrage_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arbitrage_api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://arbitrage_user:arbitrage_pass@postgres:5432/arbitrage_db
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: arbitrage_worker
+    environment:
+      DATABASE_URL: postgresql://arbitrage_user:arbitrage_pass@postgres:5432/arbitrage_db
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: rq worker --url redis://redis:6379/0 default
+
+  adminer:
+    image: adminer:latest
+    container_name: arbitrage_adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+
+volumes:
+  postgres_data:
+
